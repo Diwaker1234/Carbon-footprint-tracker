@@ -5,8 +5,8 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:./dev.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 // ==================== USER & AUTH ====================
@@ -15,380 +15,75 @@ model User {
   id              String    @id @default(cuid())
   email           String    @unique
   emailVerified   DateTime?
-  passwordHash    String?   // null for OAuth users
+  passwordHash    String?   
   name            String?
-  avatarUrl       String?
   
-  // Profile
-  country         String?   @default("US")
-  region          String?   // State/province for grid factor
-  timezone        String?   @default("UTC")
-  householdSize   Int?      @default(1)
-  housingType     HousingType?
-  homeSize_sqm    Float?
-  heatingSource   HeatingSource?
-  primaryTransport TransportMode?
-  carFuelType     FuelType?
-  dietType        DietType?
+  // Aether-Carbon Neural Profile
+  lifestyle_profile Json?     // { diet: "vegan", transit: "e-bike", grid: "US-CA" }
+  carbon_goal      Float?    // In kg CO2e
   
   // Settings
   unitSystem      UnitSystem @default(METRIC)
   currency        String    @default("USD")
-  darkMode        Boolean   @default(false)
   
-  // Goals
-  annualGoal_kg   Float?    // Target annual emissions in kg CO₂e
-  goalDeadline    DateTime?
-  
-  // Gamification
+  // Gamification: THE REVERSE-SCORE SYSTEM
+  carbon_budget   Float      @default(2000.0) // initial kg for the year
   totalPoints     Int       @default(0)
   currentStreak   Int       @default(0)
-  longestStreak   Int       @default(0)
-  lastLogDate     DateTime?
   
   // Metadata
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
-  onboardingCompleted Boolean @default(false)
-  role            UserRole  @default(USER)
-  isActive        Boolean   @default(true)
   
   // Relations
   activities      Activity[]
-  emissions       Emission[]
-  recommendations Recommendation[]
-  badges          UserBadge[]
-  notifications   Notification[]
-  sessions        Session[]
-  accounts        Account[]   // OAuth accounts
+  insights        AiInsight[]
   reports         Report[]
-  challenges      UserChallenge[]
   goals           Goal[]
-  feedbackItems   Feedback[]
   
   @@index([email])
-  @@index([country, region])
 }
 
-model Account {
-  id                String  @id @default(cuid())
-  userId            String
-  type              String  // "oauth" | "credentials"
-  provider          String  // "google" | "github" | "credentials"
-  providerAccountId String
-  refresh_token     String? @db.Text
-  access_token      String? @db.Text
-  expires_at        Int?
-  token_type        String?
-  scope             String?
-  
-  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  @@unique([provider, providerAccountId])
-  @@index([userId])
-}
-
-model Session {
-  id           String   @id @default(cuid())
-  sessionToken String   @unique
-  userId       String
-  expires      DateTime
-  
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  @@index([userId])
-}
-
-// ==================== CORE DATA ====================
+// ==================== THE ACTIVITY LEDGER ====================
 
 model Activity {
   id            String      @id @default(cuid())
   userId        String
   category      Category
-  subcategory   String      // e.g., "car_petrol", "electricity", "beef"
-  value         Float       // Quantity in original unit
-  unit          String      // "km", "kWh", "kg", "liters", etc.
-  normalizedValue Float?    // Converted to standard unit
-  normalizedUnit  String?   // Standard unit
-  date          DateTime    @db.Date  // Activity date (not timestamp)
-  note          String?     @db.VarChar(200)
+  subcategory   String      
+  raw_value     Float       
+  unit          String      
+  facility      String?
+  carbon_equivalent Float   // Output of the DEI logic
   
-  // Calculated fields
-  carbonKg      Float       // Calculated CO₂e in kg
-  emissionFactor Float      // Factor used for calculation
-  factorSource  String      // "DEFRA 2024", "EPA 2024", etc.
-  factorRegion  String      // Region used for factor lookup
-  uncertaintyPct Float?     // Uncertainty percentage
+  // Optimization Data
+  optimization_recommendation String? @db.Text
+  potential_savings_kg      Float?
   
   // Metadata
-  inputMethod   InputMethod @default(MANUAL)
-  isVerified    Boolean     @default(true)  // false if flagged as outlier
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  source        InputMethod @default(MANUAL) // Manual, OCR, API
+  date          DateTime    @default(now())
   
   // Relations
   user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  emission      Emission?
   
   @@index([userId, date])
-  @@index([userId, category])
-  @@index([userId, createdAt])
-  @@index([date])
 }
 
-model Emission {
-  id            String   @id @default(cuid())
-  userId        String
-  activityId    String   @unique
-  date          DateTime @db.Date
-  category      Category
-  subcategory   String
-  carbonKg      Float
-  
-  // Aggregation helpers
-  year          Int
-  month         Int
-  week          Int      // ISO week number
-  dayOfWeek     Int      // 0=Sunday, 6=Saturday
-  
-  createdAt     DateTime @default(now())
-  
-  // Relations
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  activity      Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
-  
-  @@index([userId, date])
-  @@index([userId, year, month])
-  @@index([userId, category, date])
-  @@index([userId, year, week])
-}
-
-// ==================== EMISSION FACTORS ====================
-
-model EmissionFactor {
-  id            String   @id @default(cuid())
-  category      Category
-  subcategory   String
-  factor        Float    // kg CO₂e per unit
-  unit          String
-  region        String   // "global", "US", "EU", "IN", "US-CA", etc.
-  source        String   // "DEFRA 2024", "EPA 2024"
-  uncertaintyPct Float   @default(20)
-  validFrom     DateTime
-  validTo       DateTime?
-  isActive      Boolean  @default(true)
-  
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  
-  @@unique([subcategory, region, isActive])
-  @@index([subcategory, region])
-  @@index([category])
-}
-
-// ==================== AGGREGATIONS ====================
-
-model DailyAggregate {
-  id            String   @id @default(cuid())
-  userId        String
-  date          DateTime @db.Date
-  totalCarbonKg Float
-  transportKg   Float    @default(0)
-  energyKg      Float    @default(0)
-  foodKg        Float    @default(0)
-  wasteKg       Float    @default(0)
-  shoppingKg    Float    @default(0)
-  waterKg       Float    @default(0)
-  activityCount Int      @default(0)
-  
-  updatedAt     DateTime @updatedAt
-  
-  @@unique([userId, date])
-  @@index([userId, date])
-}
-
-model MonthlyAggregate {
-  id            String   @id @default(cuid())
-  userId        String
-  year          Int
-  month         Int
-  totalCarbonKg Float
-  transportKg   Float    @default(0)
-  energyKg      Float    @default(0)
-  foodKg        Float    @default(0)
-  wasteKg       Float    @default(0)
-  shoppingKg    Float    @default(0)
-  waterKg       Float    @default(0)
-  activityCount Int      @default(0)
-  carbonScore   Float?   // Calculated carbon score for the month
-  
-  updatedAt     DateTime @updatedAt
-  
-  @@unique([userId, year, month])
-  @@index([userId, year])
-}
-
-// ==================== AI & RECOMMENDATIONS ====================
-
-model Recommendation {
-  id                String             @id @default(cuid())
-  userId            String
-  action            String             // Machine-readable action key
-  title             String
-  description       String             @db.Text
-  category          Category
-  difficulty        Difficulty
-  estimatedSavingsKg Float             // Annual savings in kg CO₂e
-  estimatedCostSavings Float?          // Annual cost savings in user's currency
-  coBenefits        String[]           // ["health", "money", "time"]
-  implementationSteps String[]         // Step-by-step guide
-  
-  status            RecommendationStatus @default(NEW)
-  strategy          String             // "rule_based", "collaborative", "contextual"
-  confidenceScore   Float?             // 0-1 confidence
-  
-  // User interaction
-  acceptedAt        DateTime?
-  completedAt       DateTime?
-  dismissedAt       DateTime?
-  dismissReason     String?
-  
-  // Feedback
-  helpful           Boolean?
-  userComment       String?
-  
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-  expiresAt         DateTime?
-  
-  // Relations
-  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  @@index([userId, status])
-  @@index([userId, createdAt])
-}
+// ==================== INSIGHT CACHE (THE COACH) ====================
 
 model AiInsight {
-  id            String   @id @default(cuid())
-  userId        String
-  insightType   InsightType
-  title         String
-  content       String   @db.Text
-  category      Category?
-  severity      Severity @default(INFO)
-  dataContext    Json?    // Structured data that generated this insight
-  
-  isRead        Boolean  @default(false)
-  isDismissed   Boolean  @default(false)
-  
-  createdAt     DateTime @default(now())
-  expiresAt     DateTime?
-  
-  @@index([userId, createdAt])
-  @@index([userId, isRead])
-}
-
-model Prediction {
   id                String   @id @default(cuid())
   userId            String
-  predictionType    String   // "annual_forecast", "monthly_forecast", "goal_probability"
-  predictedValue    Float
-  confidenceLow     Float
-  confidenceHigh    Float
-  confidenceLevel   Float    // e.g., 0.80 for 80% CI
-  modelVersion      String
-  
-  forecastData      Json?    // Array of {date, predicted, lower, upper}
+  ai_suggestion     String   @db.Text
+  impact_predicted  Float?   // Predicted kg saved
+  status            InsightStatus @default(NEW) // Accepted, Ignored
   
   createdAt         DateTime @default(now())
-  validUntil        DateTime
   
-  @@index([userId, predictionType])
-}
-
-// ==================== GAMIFICATION ====================
-
-model Badge {
-  id            String      @id @default(cuid())
-  code          String      @unique  // "first_log", "streak_7", "carbon_champion"
-  name          String
-  description   String
-  iconUrl       String
-  category      BadgeCategory
-  requirement   Json        // { type: "streak", value: 7 } or { type: "total_logs", value: 100 }
-  pointsAwarded Int         @default(0)
-  rarity        BadgeRarity @default(COMMON)
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   
-  // Relations
-  userBadges    UserBadge[]
-}
-
-model UserBadge {
-  id        String   @id @default(cuid())
-  userId    String
-  badgeId   String
-  awardedAt DateTime @default(now())
-  
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  badge     Badge    @relation(fields: [badgeId], references: [id])
-  
-  @@unique([userId, badgeId])
-  @@index([userId])
-}
-
-model Challenge {
-  id            String          @id @default(cuid())
-  title         String
-  description   String          @db.Text
-  challengeType ChallengeType
-  target        Json            // { metric: "total_carbon_kg", operator: "lt", value: 50, period: "week" }
-  pointsReward  Int
-  badgeReward   String?         // Badge code to award on completion
-  startDate     DateTime
-  endDate       DateTime
-  isActive      Boolean         @default(true)
-  scope         ChallengeScope  @default(GLOBAL)
-  
-  participants  UserChallenge[]
-  
-  @@index([isActive, startDate, endDate])
-}
-
-model UserChallenge {
-  id            String          @id @default(cuid())
-  userId        String
-  challengeId   String
-  joinedAt      DateTime        @default(now())
-  progress      Float           @default(0)  // 0-100%
-  status        ChallengeStatus @default(IN_PROGRESS)
-  completedAt   DateTime?
-  
-  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  challenge     Challenge       @relation(fields: [challengeId], references: [id])
-  
-  @@unique([userId, challengeId])
-  @@index([userId])
-  @@index([challengeId])
-}
-
-// ==================== NOTIFICATIONS ====================
-
-model Notification {
-  id          String           @id @default(cuid())
-  userId      String
-  type        NotificationType
-  title       String
-  message     String           @db.Text
-  actionUrl   String?          // Deep link
-  isRead      Boolean          @default(false)
-  
-  createdAt   DateTime         @default(now())
-  readAt      DateTime?
-  
-  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  @@index([userId, isRead, createdAt])
-  @@index([userId, createdAt])
+  @@index([userId, status])
 }
 
 // ==================== REPORTS ====================
@@ -396,20 +91,13 @@ model Notification {
 model Report {
   id          String     @id @default(cuid())
   userId      String
-  reportType  ReportType
   periodStart DateTime
   periodEnd   DateTime
-  format      String     @default("pdf") // "pdf", "csv", "json"
-  fileUrl     String?    // S3 URL
-  fileSize    Int?       // bytes
-  status      String     @default("pending") // "pending", "generating", "ready", "failed"
+  summary     String     @db.Text  // AI generated Executive Summary
+  fileUrl     String?    
   
   createdAt   DateTime   @default(now())
-  expiresAt   DateTime?  // Auto-delete after 30 days
-  
   user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  @@index([userId, createdAt])
 }
 
 // ==================== GOALS ====================
@@ -418,44 +106,27 @@ model Goal {
   id            String     @id @default(cuid())
   userId        String
   title         String
-  targetType    String     // "annual_total", "category_reduction", "monthly_avg"
-  targetValue   Float      // Target value in kg CO₂e
+  targetValue   Float      
   currentValue  Float      @default(0)
-  category      Category?  // null = overall goal, or specific category
-  startDate     DateTime
+  category      Category?  
   deadline      DateTime
-  status        GoalStatus @default(ACTIVE)
-  completedAt   DateTime?
   
   createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
-  
   user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  @@index([userId, status])
-}
-
-// ==================== FEEDBACK ====================
-
-model Feedback {
-  id          String   @id @default(cuid())
-  userId      String
-  type        String   // "bug", "feature", "general"
-  subject     String
-  message     String   @db.Text
-  status      String   @default("open") // "open", "in_review", "resolved"
-  
-  createdAt   DateTime @default(now())
-  
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 // ==================== ENUMS ====================
 
-enum UserRole {
-  USER
-  ADMIN
-  MODERATOR
+enum InsightStatus {
+  NEW
+  ACCEPTED
+  IGNORED
+}
+
+enum InputMethod {
+  MANUAL
+  OCR
+  API
 }
 
 enum Category {
@@ -467,148 +138,7 @@ enum Category {
   WATER
 }
 
-enum HousingType {
-  APARTMENT
-  HOUSE
-  TOWNHOUSE
-  CONDO
-  OTHER
-}
-
-enum HeatingSource {
-  NATURAL_GAS
-  ELECTRIC
-  OIL
-  HEAT_PUMP
-  WOOD
-  NONE
-}
-
-enum TransportMode {
-  CAR
-  PUBLIC_TRANSIT
-  BICYCLE
-  WALKING
-  MIXED
-}
-
-enum FuelType {
-  PETROL
-  DIESEL
-  HYBRID
-  ELECTRIC
-  PLUGIN_HYBRID
-}
-
-enum DietType {
-  OMNIVORE
-  VEGETARIAN
-  VEGAN
-  PESCATARIAN
-  FLEXITARIAN
-}
-
 enum UnitSystem {
   METRIC
   IMPERIAL
-}
-
-enum Difficulty {
-  EASY
-  MEDIUM
-  HARD
-}
-
-enum RecommendationStatus {
-  NEW
-  ACCEPTED
-  IN_PROGRESS
-  COMPLETED
-  DISMISSED
-  EXPIRED
-}
-
-enum InsightType {
-  ANOMALY
-  TREND
-  COMPARISON
-  ACHIEVEMENT
-  TIP
-  PREDICTION
-}
-
-enum Severity {
-  INFO
-  WARNING
-  ALERT
-  POSITIVE
-}
-
-enum BadgeCategory {
-  STREAK
-  MILESTONE
-  CHALLENGE
-  CATEGORY
-  SPECIAL
-}
-
-enum BadgeRarity {
-  COMMON
-  UNCOMMON
-  RARE
-  EPIC
-  LEGENDARY
-}
-
-enum ChallengeType {
-  REDUCTION
-  CONSISTENCY
-  CATEGORY_SPECIFIC
-  COMMUNITY
-}
-
-enum ChallengeScope {
-  GLOBAL
-  REGIONAL
-  COMMUNITY
-}
-
-enum ChallengeStatus {
-  IN_PROGRESS
-  COMPLETED
-  FAILED
-  ABANDONED
-}
-
-enum NotificationType {
-  ANOMALY
-  GOAL
-  STREAK
-  RECOMMENDATION
-  COMMUNITY
-  CHALLENGE
-  SYSTEM
-  REMINDER
-}
-
-enum ReportType {
-  WEEKLY
-  MONTHLY
-  ANNUAL
-  CUSTOM
-}
-
-enum GoalStatus {
-  ACTIVE
-  COMPLETED
-  FAILED
-  CANCELLED
-}
-
-enum InputMethod {
-  MANUAL
-  CSV_IMPORT
-  API_INTEGRATION
-  IOT_DEVICE
-  QUICK_LOG
 }

@@ -29,7 +29,7 @@ const MENU_ITEMS = [
   { id: "analytics", label: "Analytics", icon: <TrendingUp />, href: "/dashboard/analytics" },
   { id: "insights", label: "Insights", icon: <Lightbulb />, href: "/dashboard/insights" },
   { id: "goals", label: "Goals", icon: <Target />, href: "/dashboard/goals" },
-  { id: "challenges", label: "Challenges", icon: <Trophy />, href: "/dashboard/challenges" },
+  { id: "challenges", label: "Personal Challenges", icon: <Trophy />, href: "/dashboard/challenges" },
   { id: "reports", label: "Reports", icon: <BarChart3 />, href: "/dashboard/reports" },
 ];
 
@@ -54,17 +54,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-white shadow-lg shadow-primary/20">
               <Leaf className="w-6 h-6" />
             </div>
-            {isSidebarOpen && <span className="font-playfair text-xl font-bold text-foreground">CarbonTrack</span>}
+            {isSidebarOpen && <span className="font-playfair text-xl font-bold text-foreground">Aether-Carbon</span>}
           </div>
 
           {/* Navigation */}
           <nav className="flex-1 space-y-2">
             <button 
               onClick={() => setIsLoggerOpen(true)}
-              className="w-full flex items-center gap-3 bg-primary text-white p-4 rounded-2xl font-medium shadow-md hover:bg-primary-dark transition-all hover:scale-[1.02] active:scale-[0.98] mb-8"
+              className="w-full flex items-center gap-3 bg-primary text-white p-4 rounded-2xl font-bold shadow-xl shadow-primary/20 hover:bg-primary-dark transition-all hover:scale-[1.02] active:scale-[0.98] mb-8"
             >
-              <PlusCircle className="w-5 h-5" />
-              {isSidebarOpen && <span>Log Activity</span>}
+              <PlusCircle className="w-5 h-5 shadow-sm" />
+              {isSidebarOpen && <span>Ledger New Entry</span>}
             </button>
 
             {MENU_ITEMS.map((item) => {

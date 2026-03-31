@@ -1,9 +1,27 @@
 import { NextResponse } from 'next/server';
+import { prisma } from "@/lib/prisma";
 import Groq from 'groq-sdk';
 
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
+
+export async function GET() {
+  try {
+    const user = await prisma.user.findUnique({ where: { email: "dummy@carbontrack.com" } });
+    if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
+    
+    const insights = await prisma.aiInsight.findMany({
+      where: { userId: user.id },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return NextResponse.json(insights);
+  } catch (error) {
+    console.error("GET Insights Error:", error);
+    return NextResponse.json({ error: "Failed to fetch insights" }, { status: 500 });
+  }
+}
 
 export async function POST(req: Request) {
   try {
